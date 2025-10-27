@@ -1,7 +1,3 @@
-# ==========================================================
-# TABLERO STREAMLIT - DIGITALIZACIÓN DE PLANTAS PRODUCTIVAS
-# ==========================================================
-
 import streamlit as st
 import pandas as pd
 from influxdb_client import InfluxDBClient
@@ -18,14 +14,14 @@ query_api = client.query_api()
 # --- Consultas Flux ---
 query_dht22 = """
 from(bucket: "EXTREME_MANUFACTURING")
-  |> range(start: -24h)
+  |> range(start: -7d)
   |> filter(fn: (r) => r._measurement == "studio-dht22")
   |> filter(fn: (r) => r._field == "humedad" or r._field == "temperatura" or r._field == "sensacion_termica")
 """
 
 query_mpu = """
 from(bucket: "EXTREME_MANUFACTURING")
-  |> range(start: -24h)
+  |> range(start: -7d)
   |> filter(fn: (r) => r._measurement == "mpu6050")
   |> filter(fn: (r) =>
       r._field == "accel_x" or r._field == "accel_y" or r._field == "accel_z" or
@@ -33,28 +29,38 @@ from(bucket: "EXTREME_MANUFACTURING")
       r._field == "temperature")
 """
 
-# --- Cargar datos ---
-df_dht22 = query_api.query_data_frame(org=INFLUXDB_ORG, query=query_dht22)
-df_mpu = query_api.query_data_frame(org=INFLUXDB_ORG, query=query_mpu)
+# --- Función auxiliar para cargar y limpiar datos ---
+def load_data(query):
+    df = query_api.query_data_frame(org=INFLUXDB_ORG, query=query)
+    if isinstance(df, list):
+        df = pd.concat(df)
+    if df.empty:
+        return pd.DataFrame()
+    df = df[["_time", "_field", "_value"]].pivot(index="_time", columns="_field", values="_value")
+    df.index = pd.to_datetime(df.index)
+    df = df.apply(pd.to_numeric, errors='coerce')
+    df = df.sort_index()
+    return df
 
-df_dht22 = df_dht22[["_time", "_field", "_value"]].pivot(index="_time", columns="_field", values="_value")
-df_mpu = df_mpu[["_time", "_field", "_value"]].pivot(index="_time", columns="_field", values="_value")
+# --- Cargar datos ---
+df_dht22 = load_data(query_dht22)
+df_mpu = load_data(query_mpu)
 
 # --- Interfaz ---
 st.title("🌡️ Tablero de Digitalización de Planta")
-st.subheader("Datos en tiempo real desde InfluxDB")
+st.subheader("Datos desde InfluxDB")
 
-st.write("Este tablero muestra las variables medidas por los sensores DHT22 y MPU6050 durante las últimas 24 horas.")
-
-# Selección de variable
-sensor = st.selectbox("Selecciona el sensor a visualizar:", ["DHT22", "MPU6050"])
+sensor = st.selectbox("Selecciona el sensor:", ["DHT22", "MPU6050"])
 
 if sensor == "DHT22":
-    st.line_chart(df_dht22[["temperatura", "humedad"]])
-    st.write(df_dht22.describe())
+    if not df_dht22.empty:
+        st.line_chart(df_dht22)
+        st.dataframe(df_dht22.describe())
+    else:
+        st.warning("No hay datos disponibles del sensor DHT22 en el rango seleccionado.")
 else:
-    st.line_chart(df_mpu[["accel_x", "accel_y", "accel_z"]])
-    st.write(df_mpu.describe())
-
-# --- Extensión ---
-st.info("💡 Reto: Agrega una sección con un modelo predictivo simple (por ejemplo, una regresión lineal o suavizado exponencial).")
+    if not df_mpu.empty:
+        st.line_chart(df_mpu)
+        st.dataframe(df_mpu.describe())
+    else:
+        st.warning("No hay datos disponibles del sensor MPU6050 en el rango seleccionado.")
