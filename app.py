@@ -1,96 +1,105 @@
 import streamlit as st
-import pandas as pd
 from influxdb_client import InfluxDBClient
+from influxdb_client.client.exceptions import InfluxDBError
+import pandas as pd
+import plotly.express as px
+from datetime import datetime, timedelta
 
-# --- Configuración InfluxDB ---
+# -------------------------------
+# Configuración inicial de la app
+# -------------------------------
+st.set_page_config(page_title="Monitoreo IoT | SCADA Digital", layout="wide")
+st.title("📈 Monitoreo IoT de Planta Productiva")
+
+# -------------------------------
+# Parámetros de conexión
+# -------------------------------
 INFLUXDB_URL = "https://us-east-1-1.aws.cloud2.influxdata.com"
 INFLUXDB_TOKEN = "JcKXoXE30JQvV9Ggb4-zv6sQc0Zh6B6Haz5eMRW0FrJEduG2KcFJN9-7RoYvVORcFgtrHR-Q_ly-52pD7IC6JQ=="
 INFLUXDB_ORG = "0925ccf91ab36478"
 INFLUXDB_BUCKET = "EXTREME_MANUFACTURING"
 
-# --- Conexión InfluxDB ---
-client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
-query_api = client.query_api()
-
-# --- Configuración general de la app ---
-st.set_page_config(page_title="Tablero Planta Productiva", page_icon="🏭", layout="wide")
-
-st.title("🏭 Tablero de Digitalización de Planta Productiva")
-st.write("Visualización de datos en tiempo real desde InfluxDB Cloud (Sensores DHT22 y MPU6050).")
-
-# --- Selector de rango temporal ---
-rangos = {
-    "Últimas 24 horas": "-24h",
-    "Últimos 3 días": "-3d",
-    "Última semana": "-7d",
-    "Últimos 15 días": "-15d"
-}
-
-rango_seleccionado = st.selectbox("Selecciona el rango de tiempo:", list(rangos.keys()))
-rango_valor = rangos[rango_seleccionado]
-
-# --- Consultas Flux ---
-query_dht22 = f"""
-from(bucket: "{INFLUXDB_BUCKET}")
-  |> range(start: {rango_valor})
-  |> filter(fn: (r) => r._measurement == "studio-dht22")
-  |> filter(fn: (r) => r._field == "humedad" or r._field == "temperatura" or r._field == "sensacion_termica")
-"""
-
-query_mpu = f"""
-from(bucket: "{INFLUXDB_BUCKET}")
-  |> range(start: {rango_valor})
-  |> filter(fn: (r) => r._measurement == "mpu6050")
-  |> filter(fn: (r) =>
-      r._field == "accel_x" or r._field == "accel_y" or r._field == "accel_z" or
-      r._field == "gyro_x" or r._field == "gyro_y" or r._field == "gyro_z" or
-      r._field == "temperature")
-"""
-
-# --- Función para cargar datos ---
-def load_data(query):
+# -------------------------------
+# Función para obtener datos de InfluxDB
+# -------------------------------
+@st.cache_data(ttl=300)
+def obtener_datos(rango_horas):
     try:
-        df = query_api.query_data_frame(org=INFLUXDB_ORG, query=query)
-        if isinstance(df, list):
-            df = pd.concat(df)
-        if df.empty:
-            return pd.DataFrame()
+        with InfluxDBClient(url=url, token=token, org=org) as client:
+            query_api = client.query_api()
+            query = f'''
+            from(bucket: "{bucket}")
+              |> range(start: -{rango_horas}h)
+              |> filter(fn: (r) => r._measurement == "sensores")
+              |> filter(fn: (r) => r._field == "temperatura" or r._field == "humedad")
+              |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
+              |> yield(name: "mean")
+            '''
+            df = query_api.query_data_frame(org=org, query=query)
 
-        columnas_validas = [c for c in ["_time", "_field", "_value"] if c in df.columns]
-        df = df[columnas_validas]
-        df = df.pivot(index="_time", columns="_field", values="_value")
-        df.index = pd.to_datetime(df.index, errors="coerce")
-        df = df.apply(pd.to_numeric, errors="coerce")
-        df = df.dropna(how="all").sort_index()
-        return df
+            if df.empty:
+                return pd.DataFrame()
+
+            # Limpiar y organizar datos
+            df = df[["_time", "_field", "_value"]]
+            df = df.rename(columns={"_time": "Tiempo", "_value": "Valor", "_field": "Variable"})
+            return df
+
+    except InfluxDBError as e:
+        st.error(f"Error en la consulta a InfluxDB: {e}")
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"Error al cargar datos: {e}")
+        st.error(f"Ocurrió un error inesperado: {e}")
         return pd.DataFrame()
 
-# --- Cargar datos de InfluxDB ---
-with st.spinner("⏳ Cargando datos desde InfluxDB..."):
-    df_dht22 = load_data(query_dht22)
-    df_mpu = load_data(query_mpu)
+# -------------------------------
+# Filtros de la interfaz
+# -------------------------------
+st.sidebar.header("⚙️ Configuración de visualización")
 
-# --- Selección de sensor ---
-sensor = st.radio("Selecciona el sensor a visualizar:", ["DHT22", "MPU6050"], horizontal=True)
+rango_opciones = {
+    "Última hora": 1,
+    "Últimas 6 horas": 6,
+    "Últimas 12 horas": 12,
+    "Últimas 24 horas": 24,
+    "Últimos 3 días": 72,
+}
+rango_seleccion = st.sidebar.selectbox("Selecciona rango de tiempo:", list(rango_opciones.keys()))
 
-# --- Mostrar gráficos ---
-if sensor == "DHT22":
-    st.subheader("🌡️ Sensor DHT22 — Temperatura, Humedad y Sensación Térmica")
-    if not df_dht22.empty:
-        st.line_chart(df_dht22.reset_index(), x="_time", y=list(df_dht22.columns))
-        st.dataframe(df_dht22.describe().T)
-    else:
-        st.warning("⚠️ No hay datos disponibles del sensor DHT22 en el rango seleccionado.")
+st.info(f"🔄 Cargando datos de los últimos {rango_opciones[rango_seleccion]} horas...")
+
+# -------------------------------
+# Cargar los datos
+# -------------------------------
+df = obtener_datos(rango_opciones[rango_seleccion])
+
+# -------------------------------
+# Mostrar resultados
+# -------------------------------
+if df.empty:
+    st.warning("⚠️ No se encontraron datos para el rango seleccionado.")
 else:
-    st.subheader("📈 Sensor MPU6050 — Acelerómetro y Giroscopio")
-    if not df_mpu.empty:
-        st.line_chart(df_mpu.reset_index(), x="_time", y=list(df_mpu.columns))
-        st.dataframe(df_mpu.describe().T)
-    else:
-        st.warning("⚠️ No hay datos disponibles del sensor MPU6050 en el rango seleccionado.")
+    st.success(f"✅ Datos cargados correctamente ({len(df)} registros).")
 
-# --- Información final ---
-st.markdown("---")
-st.caption("Proyecto de práctica — Curso *Digitalización de Plantas Productivas*, Universidad EAFIT.")
+    col1, col2 = st.columns(2)
+    with col1:
+        temp_df = df[df["Variable"] == "temperatura"]
+        if not temp_df.empty:
+            fig_temp = px.line(temp_df, x="Tiempo", y="Valor", title="Temperatura (°C)", markers=True)
+            st.plotly_chart(fig_temp, use_container_width=True)
+        else:
+            st.info("No hay datos de temperatura disponibles.")
+
+    with col2:
+        hum_df = df[df["Variable"] == "humedad"]
+        if not hum_df.empty:
+            fig_hum = px.line(hum_df, x="Tiempo", y="Valor", title="Humedad (%)", markers=True)
+            st.plotly_chart(fig_hum, use_container_width=True)
+        else:
+            st.info("No hay datos de humedad disponibles.")
+
+# -------------------------------
+# Debug opcional
+# -------------------------------
+with st.expander("🧠 Datos crudos (debug)"):
+    st.dataframe(df)
