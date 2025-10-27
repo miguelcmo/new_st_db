@@ -14,14 +14,14 @@ query_api = client.query_api()
 # --- Consultas Flux ---
 query_dht22 = """
 from(bucket: "EXTREME_MANUFACTURING")
-  |> range(start: -7d)
+  |> range(start: -3d)
   |> filter(fn: (r) => r._measurement == "studio-dht22")
   |> filter(fn: (r) => r._field == "humedad" or r._field == "temperatura" or r._field == "sensacion_termica")
 """
 
 query_mpu = """
 from(bucket: "EXTREME_MANUFACTURING")
-  |> range(start: -7d)
+  |> range(start: -3d)
   |> filter(fn: (r) => r._measurement == "mpu6050")
   |> filter(fn: (r) =>
       r._field == "accel_x" or r._field == "accel_y" or r._field == "accel_z" or
