@@ -13,7 +13,7 @@ client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG
 query_api = client.query_api()
 
 # --- Interfaz de usuario ---
-st.title("📊 Tablero de Digitalización de Planta")
+st.title("📊 Tablero de Proyecto Computación Física")
 st.write("Visualización de datos desde InfluxDB en tiempo real.")
 
 sensor = st.selectbox("Selecciona el sensor:", ["DHT22", "MPU6050"])
